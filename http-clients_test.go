@@ -27,7 +27,7 @@ func CallNbconvert() {
 }
 
 func TestCallNbconvert(t *testing.T) {
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 100; i++ {
 		CallNbconvert()
 	}
 }
