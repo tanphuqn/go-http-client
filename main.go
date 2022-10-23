@@ -3,9 +3,8 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
-	"os"
-	"os/signal"
 	"strings"
 
 	"github.com/google/uuid"
@@ -27,7 +26,7 @@ type KernelContentResponse struct {
 	ExecutionCount int32  `json:"execution_count"`
 }
 
-type KernelMessageResponse struct {
+type KernelMessage struct {
 	Header       KernelHeaderResponse     `json:"header"`
 	MsgId        string                   `json:"msg_id"`
 	MsgType      string                   `json:"msg_type"`
@@ -44,36 +43,22 @@ type KernelSpec struct {
 	KernelPath  string `json:"kernel_path"`
 }
 
-func main() {
-	flag.Parse()
-	log.SetFlags(0)
-	// https://github.com/gorilla/websocket/blob/master/examples/echo/client.go
-
-	kernelId := "519d1cf2-2db4-4486-9872-52e66e5a7eae"
+func RunConsoleMessages(kernelId string, username string, token string, cmd string) (string, error) {
 	uuidMsg, _ := uuid.NewUUID()
 	msgId := uuidMsg.String()
-	log.Println("msgId:", msgId)
 	uuidSession, _ := uuid.NewUUID()
 	session := uuidSession.String()
-	code := "!jupyter kernelspec list"
 	log.Println("msgId:", msgId)
 	log.Println("session:", session)
+	result := ""
+	url := "wss://jupyterhub.cluster-dev.exspanse.com/user/user-1/api/kernels/" + kernelId + "/channels?token=" + token
 
-	var kernels []KernelSpec
-
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
-	// url := "wss://jupyterhub.cluster-dev.exspanse.com/user/clearuser-1/api/kernels/c9d53002-b511-4052-a44b-c382ab4d0189/channels?token=4d2dd9c82e624fd4afd074b265e44f73"
-	url := "wss://jupyterhub.cluster-dev.exspanse.com/user/user-1/api/kernels/" + kernelId + "/channels?token=4d2dd9c82e624fd4afd074b265e44f73"
-
-	log.Printf("connecting to %s", url)
-	//wss://jupyterhub.cluster-dev.exspanse.com/user/user-1/api/kernels/996e2a47-a9e8-4183-9895-cff65ecbcaab/channels?token=4d2dd9c82e624fd4afd074b265e44f73 –
 	c, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		log.Fatal("dial:", err)
 	}
 	defer c.Close()
-
+	log.Printf("connecting to %s", url)
 	done := make(chan struct{})
 
 	go func() {
@@ -84,7 +69,7 @@ func main() {
 				log.Println("read:", err)
 				return
 			}
-			var kernelSpecs KernelMessageResponse
+			var kernelSpecs KernelMessage
 			if err := json.Unmarshal(message, &kernelSpecs); err != nil {
 				log.Println("read:", err)
 				return
@@ -92,56 +77,18 @@ func main() {
 			if kernelSpecs.MsgType == "stream" &&
 				session == kernelSpecs.ParentHeader.Session &&
 				msgId == kernelSpecs.ParentHeader.MsgId {
-				// log.Println("recv: ", string(message))
-				// log.Println("kernelSpecs: ", kernelSpecs.Content.Text)
-				kernelLines := strings.Split(kernelSpecs.Content.Text, "\r\n")
-				for _, line_str := range kernelLines {
-					if strings.HasPrefix(line_str, "Available kernels") {
-						continue
-					}
-					cols := strings.Split(line_str, " ")
-					var kernelCols []string
-
-					for _, col := range cols {
-						if col != "" {
-							kernelCols = append(kernelCols, col)
-						}
-					}
-
-					if len(kernelCols) > 1 {
-						name := kernelCols[0]
-						pkg := kernelCols[1]
-						// log.Println(name, "name")
-						// jsonFile, err := os.Open(pkg + "/kernel.json")
-						// if err != nil {
-						// 	continue
-						// }
-						// byteValue, _ := ioutil.ReadAll(jsonFile)
-						// var result map[string]interface{}
-						// json.Unmarshal([]byte(byteValue), &result)
-						kernel := KernelSpec{
-							Name: name,
-							// DisplayName: fmt.Sprintf("%s", result["display_name"]),
-							KernelPath: pkg,
-						}
-						kernels = append(kernels, kernel)
-					}
-
-				}
-				log.Println("kernels: ", kernels)
+				result = kernelSpecs.Content.Text
+				// log.Println(result, "content")
 				break
 			}
-
 		}
+		return
 	}()
-
-	// ticker := time.NewTicker(time.Second)
-	// defer ticker.Stop()
 
 	jsonData := map[string]interface{}{
 		"header": map[string]string{
 			"msg_id":   msgId,
-			"username": "user-1",
+			"username": username,
 			// "username": "exspanse",
 			"session":  session,
 			"msg_type": "execute_request",
@@ -150,7 +97,7 @@ func main() {
 		"msg_type": "execute_request",
 		"metadata": map[string]string{},
 		"content": map[string]interface{}{
-			"code":             code,
+			"code":             fmt.Sprintf("!%s", cmd),
 			"silent":           false,
 			"store_history":    true,
 			"user_expressions": map[string]string{},
@@ -166,13 +113,14 @@ func main() {
 	c.WriteMessage(websocket.TextMessage, jsonB)
 	if err != nil {
 		log.Println("write:", err)
-		return
+		return "", err
 	}
-
+	// log.Printf("WriteMessage to %s", string(jsonB))
 	for {
 		select {
 		case <-done:
-			return
+			// log.Println(result, "result")
+			return result, nil
 			// case t := <-ticker.C:
 
 			// case <-interrupt:
@@ -192,5 +140,62 @@ func main() {
 			// 	return
 		}
 	}
+}
+
+func ConvertToObject(kernelId string, username string, token string, content string) (kernels []KernelSpec, err error) {
+	kernelLines := strings.Split(content, "\r\n")
+	for _, line_str := range kernelLines {
+		if strings.HasPrefix(line_str, "Available kernels") {
+			continue
+		}
+		cols := strings.Split(line_str, " ")
+		var kernelCols []string
+
+		for _, col := range cols {
+			if col != "" {
+				kernelCols = append(kernelCols, col)
+			}
+		}
+
+		if len(kernelCols) > 1 {
+			name := kernelCols[0]
+			pkg := kernelCols[1]
+			code := fmt.Sprintf("cat %s/kernel.json", pkg)
+			kernelJson, err := RunConsoleMessages(kernelId, username, token, code)
+			if err != nil {
+				log.Println("Error :", err)
+				continue
+			}
+
+			var result map[string]interface{}
+			json.Unmarshal([]byte(kernelJson), &result)
+			kernel := KernelSpec{
+				Name:        name,
+				DisplayName: fmt.Sprintf("%s", result["display_name"]),
+				KernelPath:  pkg,
+			}
+			kernels = append(kernels, kernel)
+		}
+	}
+	return kernels, nil
+}
+
+func main() {
+	flag.Parse()
+	log.SetFlags(0)
+	// https://github.com/gorilla/websocket/blob/master/examples/echo/client.go
+
+	kernelId := "f0bf08b5-583c-4879-b228-5278e4614f71"
+	username := "user-1"
+	token := "4d2dd9c82e624fd4afd074b265e44f73"
+	code := "jupyter kernelspec list"
+	content, err := RunConsoleMessages(kernelId, username, token, code)
+	if err != nil {
+		log.Println("Error :", err)
+		return
+	}
+
+	kernels, err := ConvertToObject(kernelId, username, token, content)
+	log.Println(kernels, "kernels")
 
 }
