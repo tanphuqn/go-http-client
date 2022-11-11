@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	_ "github.com/snowflakedb/gosnowflake"
 )
 
 type KernelHeaderResponse struct {
@@ -38,6 +40,12 @@ type KernelMessage struct {
 }
 
 type KernelSpec struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	KernelPath  string `json:"kernel_path"`
+}
+
+type Env struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
 	KernelPath  string `json:"kernel_path"`
@@ -142,7 +150,7 @@ func RunConsoleMessages(kernelId string, username string, token string, cmd stri
 	}
 }
 
-func ConvertToObject(kernelId string, username string, token string, content string) (kernels []KernelSpec, err error) {
+func ConvertToKernelSpecObject(kernelId string, username string, token string, content string) (kernels []KernelSpec, err error) {
 	kernelLines := strings.Split(content, "\r\n")
 	for _, line_str := range kernelLines {
 		if strings.HasPrefix(line_str, "Available kernels") {
@@ -180,22 +188,75 @@ func ConvertToObject(kernelId string, username string, token string, content str
 	return kernels, nil
 }
 
+func ConvertToEnvObject(kernelId string, username string, token string, content string) (envs []Env, err error) {
+	kernelLines := strings.Split(content, "\r\n")
+	for _, line_str := range kernelLines {
+		if strings.HasPrefix(line_str, "Available kernels") {
+			continue
+		}
+		cols := strings.Split(line_str, " ")
+		var kernelCols []string
+
+		for _, col := range cols {
+			if col != "" {
+				kernelCols = append(kernelCols, col)
+			}
+		}
+
+		if len(kernelCols) > 1 {
+			name := kernelCols[0]
+			pkg := kernelCols[1]
+			code := fmt.Sprintf("cat %s/kernel.json", pkg)
+			kernelJson, err := RunConsoleMessages(kernelId, username, token, code)
+			if err != nil {
+				log.Println("Error :", err)
+				continue
+			}
+
+			var result map[string]interface{}
+			json.Unmarshal([]byte(kernelJson), &result)
+			env := Env{
+				Name:        name,
+				DisplayName: fmt.Sprintf("%s", result["display_name"]),
+				KernelPath:  pkg,
+			}
+			envs = append(envs, env)
+		}
+	}
+	return envs, nil
+}
+
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
 	// https://github.com/gorilla/websocket/blob/master/examples/echo/client.go
 
-	kernelId := "f0bf08b5-583c-4879-b228-5278e4614f71"
-	username := "user-1"
-	token := "4d2dd9c82e624fd4afd074b265e44f73"
-	code := "jupyter kernelspec list"
-	content, err := RunConsoleMessages(kernelId, username, token, code)
-	if err != nil {
-		log.Println("Error :", err)
-		return
-	}
+	// kernelId := "f0bf08b5-583c-4879-b228-5278e4614f71"
+	// username := "user-1"
+	// token := "4d2dd9c82e624fd4afd074b265e44f73"
+	// code := "jupyter kernelspec list"
+	// content, err := RunConsoleMessages(kernelId, username, token, code)
+	// if err != nil {
+	// 	log.Println("Error :", err)
+	// 	return
+	// }
 
-	kernels, err := ConvertToObject(kernelId, username, token, content)
-	log.Println(kernels, "kernels")
+	// kernels, err := ConvertToKernelSpecObject(kernelId, username, token, content)
+	// log.Println(kernels, "kernels")
+
+	// First task is "Snowflake API integration"
+	// https://docs.snowflake.com/en/user-guide/go-driver.html
+	// https://pkg.go.dev/github.com/snowflakedb/gosnowflake#section-readme
+	// go get -u github.com/snowflakedb/gosnowflake
+	// https://docs.snowflake.com/en/sql-reference/intro-summary-data-types.html
+
+	db, err := sql.Open("snowflake", "tanphuqn:@Minh10112014@pxwdfsd-vy07669/EXSPANSE/EX_SCHEMA?warehouse=wh_exspanse")
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = db.Exec("insert into users values (?)", "aldy")
+
+	fmt.Println("Connect to success")
+	defer db.Close()
 
 }
