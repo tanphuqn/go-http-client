@@ -250,7 +250,7 @@ func main() {
 	// go get -u github.com/snowflakedb/gosnowflake
 	// https://docs.snowflake.com/en/sql-reference/intro-summary-data-types.html
 
-	db, err := sql.Open("snowflake", "tanphuqn:@Minh10112014@pxwdfsd-vy07669/EXSPANSE/EX_SCHEMA?warehouse=wh_exspanse")
+	db, err := sql.Open("snowflake", "tanphuqn:@6dYw6!Tuc5Et558@pxwdfsd-vy07669/EXSPANSE/EX_SCHEMA?warehouse=wh_exspanse")
 	if err != nil {
 		log.Fatal(err)
 	}
